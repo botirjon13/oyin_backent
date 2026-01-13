@@ -1,7 +1,7 @@
 {
   "name": "tomama-backend-simple",
   "version": "1.0.0",
-  "description": "Leaderboard backend for Telegram game",
+  "description": "Simple leaderboard backend without Prisma",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,9 +10,9 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "pg": "^8.11.1",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "pg": "^8.12.0",
     "node-fetch": "^3.3.2"
   }
 }
