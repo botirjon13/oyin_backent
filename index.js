@@ -3,20 +3,25 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-// PostgreSQL ulanish
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Ball saqlash
+// 🔹 Jadvalni avtomatik yaratish (1 marta)
+pool.query(`
+  CREATE TABLE IF NOT EXISTS leaderboard (
+    user_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    score INTEGER NOT NULL
+  )
+`);
+
 app.post('/save', async (req, res) => {
   const { userId, name, score } = req.body;
-
   try {
     await pool.query(
       `
@@ -28,7 +33,6 @@ app.post('/save', async (req, res) => {
       `,
       [userId.toString(), name, score]
     );
-
     res.json({ success: true });
   } catch (e) {
     console.error(e);
@@ -36,7 +40,6 @@ app.post('/save', async (req, res) => {
   }
 });
 
-// Top-10 olish
 app.get('/leaderboard', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -50,20 +53,5 @@ app.get('/leaderboard', async (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () =>
-  console.log('Server ishlayapti')
+  console.log('Server ishga tushdi')
 );
-app.get('/init-db', async (req, res) => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS leaderboard (
-        user_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        score INTEGER NOT NULL
-      )
-    `);
-    res.send('OK: table created');
-  } catch (e) {
-    console.error(e);
-    res.status(500).send('error');
-  }
-});
