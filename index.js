@@ -57,3 +57,23 @@ app.get('/leaderboard', async (req, res) => {
 app.listen(process.env.PORT || 3000, () =>
   console.log('Server ishga tushdi')
 );
+async function getUserPhoto(userId) {
+  try {
+    const r1 = await fetch(
+      `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getUserProfilePhotos?user_id=${userId}&limit=1`
+    );
+    const d1 = await r1.json();
+    if (!d1.result.total_count) return null;
+
+    const fileId = d1.result.photos[0][0].file_id;
+
+    const r2 = await fetch(
+      `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
+    );
+    const d2 = await r2.json();
+
+    return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${d2.result.file_path}`;
+  } catch {
+    return null;
+  }
+}
