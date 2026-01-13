@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { Pool } = require("pg");
-const fetch = require("node-fetch");
+const { fetch } = require("undici"); // undici bilan fetch ishlaydi
 
 dotenv.config();
 
