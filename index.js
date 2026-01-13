@@ -1,11 +1,10 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import pkg from "pg";
-import fetch from "node-fetch";
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const { Pool } = require("pg");
+const fetch = require("node-fetch");
 
 dotenv.config();
-const { Pool } = pkg;
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -61,16 +60,16 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// O'yinchi ball qo'shish endpoint (misol uchun)
+// O'yinchi ball qo'shish endpoint
 app.post("/add-score", async (req, res) => {
   const { user_id, username, name, score } = req.body;
   if (!user_id || !name || !score) return res.status(400).json({ error: "Missing fields" });
 
   try {
     await pool.query(
-      `INSERT INTO leaderboard (user_id, username, name, score) 
+      `INSERT INTO leaderboard (user_id, username, name, score)
        VALUES ($1,$2,$3,$4)
-       ON CONFLICT (user_id) 
+       ON CONFLICT (user_id)
        DO UPDATE SET score = EXCLUDED.score, username = EXCLUDED.username, name = EXCLUDED.name`,
       [user_id, username || null, name, score]
     );
