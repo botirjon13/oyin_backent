@@ -52,3 +52,18 @@ app.get('/leaderboard', async (req, res) => {
 app.listen(process.env.PORT || 3000, () =>
   console.log('Server ishlayapti')
 );
+app.get('/init-db', async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS leaderboard (
+        user_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        score INTEGER NOT NULL
+      )
+    `);
+    res.send('OK: table created');
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('error');
+  }
+});
