@@ -61,4 +61,4 @@ app.get('/leaderboard', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server port ${PORT} da ishga tushdi`));
+app.listen(PORT, () => console.log(`Server port ${PORT} da ishga tushdi (2026 yangilanishi)`));
