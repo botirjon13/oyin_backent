@@ -1,18 +1,24 @@
-require('dotenv').config(); // .env faylidan BOT_TOKEN va DATABASE_URL oladi
-const express = require('express');
-const cors = require('cors');
-const { PrismaClient } = require('@prisma/client');
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import pkg from "pg";
+import fetch from "node-fetch";
+
+dotenv.config();
+const { Pool } = pkg;
 
 const app = express();
-const prisma = new PrismaClient();
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(express.json());
 
-// --- Funksiya: Telegram profil rasmini olish ---
-async function getUserPhoto(userId) {
-  if (!process.env.BOT_TOKEN) return null;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
 
+// Telegram foydalanuvchi fotosini olish
+async function getUserPhoto(userId) {
   try {
     const res = await fetch(
       `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getUserProfilePhotos?user_id=${userId}&limit=1`
@@ -21,7 +27,6 @@ async function getUserPhoto(userId) {
     if (!data.result.total_count) return null;
 
     const fileId = data.result.photos[0][0].file_id;
-
     const fileRes = await fetch(
       `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getFile?file_id=${fileId}`
     );
@@ -33,55 +38,49 @@ async function getUserPhoto(userId) {
   }
 }
 
-// --- Endpoint: Ballarni saqlash ---
-app.post('/save', async (req, res) => {
-  const { name, score, userId, username } = req.body;
-
+// Leaderboard endpoint
+app.get("/leaderboard", async (req, res) => {
   try {
-    const photo_url = await getUserPhoto(userId);
+    const { rows } = await pool.query(
+      `SELECT user_id, username, name, score FROM leaderboard ORDER BY score DESC LIMIT 10`
+    );
 
-    await prisma.leaderboard.upsert({
-      where: { userId: userId.toString() },
-      update: {
-        score: score,
-        name: name,
-        username: username || null,
-        photo_url: photo_url || null
-      },
-      create: {
-        userId: userId.toString(),
-        name: name,
-        username: username || null,
-        photo_url: photo_url || null,
-        score: score
-      },
-    });
+    const enriched = await Promise.all(
+      rows.map(async (r) => ({
+        name: r.name,
+        username: r.username || null,
+        score: r.score,
+        photo: await getUserPhoto(r.user_id)
+      }))
+    );
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Save xatolik:", err);
-    res.status(500).json({ error: "Server xatosi" });
-  }
-});
-
-// --- Endpoint: Top 10 leaderboard ---
-app.get('/leaderboard', async (req, res) => {
-  try {
-    const topPlayers = await prisma.leaderboard.findMany({
-      orderBy: { score: 'desc' },
-      take: 10,
-      select: { name: true, score: true, username: true, photo_url: true }
-    });
-
-    res.json(topPlayers);
-  } catch (err) {
-    console.error("Leaderboard xatolik:", err);
+    res.json(enriched);
+  } catch (e) {
+    console.error("DB error:", e);
     res.status(500).json({ error: "DB error" });
   }
 });
 
-// --- Serverni ishga tushirish ---
-const PORT = process.env.PORT || 3000;
+// O'yinchi ball qo'shish endpoint (misol uchun)
+app.post("/add-score", async (req, res) => {
+  const { user_id, username, name, score } = req.body;
+  if (!user_id || !name || !score) return res.status(400).json({ error: "Missing fields" });
+
+  try {
+    await pool.query(
+      `INSERT INTO leaderboard (user_id, username, name, score) 
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id) 
+       DO UPDATE SET score = EXCLUDED.score, username = EXCLUDED.username, name = EXCLUDED.name`,
+      [user_id, username || null, name, score]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    console.error("Save error:", e);
+    res.status(500).json({ error: "DB error" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server ${PORT} portda ishga tushdi`);
 });
