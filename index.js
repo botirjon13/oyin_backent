@@ -1,9 +1,9 @@
 // index.js
+require('dotenv').config(); // .env faylni o‘qiydi
 const express = require('express');
 const cors = require('cors');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { Pool } = require('pg'); // Postgres pool
-require('dotenv').config();
 
 const app = express();
 app.use(cors());
