@@ -1,0 +1,16 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Bizning baza turi Postgres
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Bizning reyting jadvali
+model Leaderboard {
+  userId String  @id @map("user_id")
+  name   String
+  score  Int
+}
