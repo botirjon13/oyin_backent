@@ -1,5 +1,5 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const { Pool } = require('pg');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -7,65 +7,66 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// MongoDB-ga ulanish (Railway-da DB_URL o'zgaruvchisini sozlang)
-const mongoURI = process.env.MONGO_URI || "mongodb://localhost:27017/tomama_game";
-mongoose.connect(mongoURI)
-    .then(() => console.log("MongoDB-ga ulanish muvaffaqiyatli!"))
-    .catch(err => console.error("DB ulanishda xato:", err));
-
-// Foydalanuvchi sxemasi
-const userSchema = new mongoose.Schema({
-    telegram_id: { type: Number, required: true, unique: true },
-    username: { type: String, default: "O'yinchi" },
-    score: { type: Number, default: 0 },
-    diamonds: { type: Number, default: 0 },
-    lastPlayed: { type: Date, default: Date.now }
-});
-
-const User = mongoose.model('User', userSchema);
-
-// 1. Ballarni saqlash va Ro'yxatdan o'tish
-app.post('/save', async (req, res) => {
-    const { telegram_id, username, score } = req.body;
-
-    if (!telegram_id) return res.status(400).send("ID yetishmayapti");
-
-    try {
-        let user = await User.findOne({ telegram_id });
-
-        if (user) {
-            // Agar yangi ball eski baldan yuqori bo'lsa yangilaymiz
-            if (score > user.score) {
-                user.score = score;
-            }
-            user.username = username; // Ism o'zgargan bo'lsa yangilash
-            user.lastPlayed = Date.now();
-            await user.save();
-        } else {
-            // Yangi foydalanuvchi yaratish
-            user = new User({ telegram_id, username, score });
-            await user.save();
-        }
-
-        res.json({ status: "ok", highScore: user.score });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+// Настройка подключения к PostgreSQL
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL, // Railway сам дает эту переменную
+    ssl: {
+        rejectUnauthorized: false // Обязательно для облачных БД (Railway, Render)
     }
 });
 
-// 2. TOP 10 Reytingni olish
+// Инициализация таблицы (создастся сама, если её нет)
+const initDB = async () => {
+    const queryText = `
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            telegram_id BIGINT UNIQUE NOT NULL,
+            username TEXT,
+            score INTEGER DEFAULT 0,
+            last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `;
+    await pool.query(queryText);
+    console.log("База данных PostgreSQL готова.");
+};
+initDB();
+
+// 1. Сохранение результата
+app.post('/save', async (req, res) => {
+    const { telegram_id, username, score } = req.body;
+
+    if (!telegram_id) return res.status(400).json({ error: "ID missing" });
+
+    try {
+        // Логика: если юзер есть — обновляем рекорд, если нет — создаем
+        const query = `
+            INSERT INTO users (telegram_id, username, score)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (telegram_id) 
+            DO UPDATE SET 
+                score = GREATEST(users.score, EXCLUDED.score),
+                username = EXCLUDED.username,
+                last_played = CURRENT_TIMESTAMP
+            RETURNING score;
+        `;
+        const result = await pool.query(query, [telegram_id, username, score]);
+        res.json({ status: "ok", highScore: result.rows[0].score });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "DB Error" });
+    }
+});
+
+// 2. Топ-10 игроков
 app.get('/leaderboard', async (req, res) => {
     try {
-        const topPlayers = await User.find()
-            .sort({ score: -1 }) // Ballar bo'yicha kamayish
-            .limit(10)           // Faqat 10 ta
-            .select('username score -_id'); // Faqat kerakli maydonlar
-
-        res.json(topPlayers);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+        const result = await pool.query('SELECT username, score FROM users ORDER BY score DESC LIMIT 10');
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "DB Error" });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server ${PORT}-portda ishlamoqda...`));
+app.listen(PORT, () => console.log(`PostgreSQL Server running on port ${PORT}`));
