@@ -522,19 +522,17 @@ app.post("/coupons/mark-used", async (req, res) => {
 // IMPORTANT: does NOT mark used (scan should not change status in your new rule)
 // just shows status and code
 // ----------------------
+// ----------------------
+// GET /redeem?token=...  (QR scan)
+// Endi scan qilganda USED qilmaydi, faqat ko'rsatadi
+// ----------------------
 app.get("/redeem", async (req, res) => {
   try {
     const token = String(req.query.token || "");
     if (!token) return res.status(400).send("Token required");
 
     const r = await pool.query(
-      `
-      SELECT uc.status, uc.voucher_code, c.title
-      FROM user_coupons uc
-      JOIN coupons c ON c.id = uc.coupon_id
-      WHERE uc.token = $1
-      LIMIT 1;
-      `,
+      `SELECT voucher_code, status FROM user_coupons WHERE token=$1 LIMIT 1;`,
       [token]
     );
 
@@ -543,12 +541,13 @@ app.get("/redeem", async (req, res) => {
     const row = r.rows[0];
     return res
       .status(200)
-      .send(`STATUS: ${String(row.status).toUpperCase()} | ${row.title} | CODE: ${row.voucher_code}`);
+      .send(`Coupon: ${row.voucher_code} | Status: ${String(row.status).toUpperCase()}`);
   } catch (e) {
     console.error("REDEEM ERROR:", e);
     return res.status(500).send("Server error");
   }
 });
+
 
 // ----------------------
 initDB()
