@@ -28,6 +28,7 @@ async function initDB() {
       );
     `);
 
+    // indexlar
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_score ON users(score DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_last_played ON users(last_played);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest);`);
@@ -41,10 +42,15 @@ initDB();
 
 app.get("/", (req, res) => res.json({ status: "ok" }));
 
-// REGISTER: telegram yoki guest
+/**
+ * REGISTER
+ * - Telegram bo'lsa: ON CONFLICT (telegram_id) -> UPDATE
+ * - Guest bo'lsa:    ON CONFLICT (identity)   -> UPDATE
+ */
 app.post("/register", async (req, res) => {
   try {
     const { mode, telegram_id, guest_id, username, avatar_id } = req.body || {};
+
     const safeAvatarId = Number.isFinite(Number(avatar_id)) ? Number(avatar_id) : 1;
     const safeUsername = (username ? String(username) : "NoName").slice(0, 60);
 
@@ -57,13 +63,13 @@ app.post("/register", async (req, res) => {
         `
         INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, last_played)
         VALUES ($1, $2, FALSE, $3, $4, NOW())
-        ON CONFLICT (identity)
+        ON CONFLICT (telegram_id)
         DO UPDATE SET
-          telegram_id = EXCLUDED.telegram_id,
-          is_guest = FALSE,
-          username = EXCLUDED.username,
-          avatar_id = EXCLUDED.avatar_id,
-          last_played = NOW()
+          identity   = EXCLUDED.identity,
+          is_guest   = FALSE,
+          username   = EXCLUDED.username,
+          avatar_id  = EXCLUDED.avatar_id,
+          last_played= NOW()
         RETURNING identity, telegram_id, is_guest, username, avatar_id, score;
         `,
         [identity, tgId, safeUsername, safeAvatarId]
@@ -78,12 +84,12 @@ app.post("/register", async (req, res) => {
 
       const { rows } = await pool.query(
         `
-        INSERT INTO users (identity, is_guest, username, avatar_id, last_played)
-        VALUES ($1, TRUE, $2, $3, NOW())
+        INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, last_played)
+        VALUES ($1, NULL, TRUE, $2, $3, NOW())
         ON CONFLICT (identity)
         DO UPDATE SET
-          username = EXCLUDED.username,
-          avatar_id = EXCLUDED.avatar_id,
+          username    = EXCLUDED.username,
+          avatar_id   = EXCLUDED.avatar_id,
           last_played = NOW()
         RETURNING identity, telegram_id, is_guest, username, avatar_id, score;
         `,
@@ -100,7 +106,9 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// SAVE SCORE (identity orqali)
+/**
+ * SAVE SCORE: identity bo'yicha
+ */
 app.post("/save", async (req, res) => {
   try {
     const { identity, score } = req.body || {};
@@ -111,7 +119,8 @@ app.post("/save", async (req, res) => {
     const { rows } = await pool.query(
       `
       UPDATE users
-      SET score = GREATEST(score, $2), last_played = NOW()
+      SET score = GREATEST(score, $2),
+          last_played = NOW()
       WHERE identity = $1
       RETURNING score;
       `,
@@ -126,7 +135,9 @@ app.post("/save", async (req, res) => {
   }
 });
 
-// LEADERBOARD
+/**
+ * LEADERBOARD
+ */
 app.get("/leaderboard", async (req, res) => {
   try {
     const { rows } = await pool.query(
