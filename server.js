@@ -15,6 +15,36 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// ----------------------
+// helpers
+// ----------------------
+function makeIdentityTelegram(telegram_id) {
+  return `tg_${telegram_id}`;
+}
+function makeIdentityGuest(guest_id) {
+  return `guest_${guest_id}`;
+}
+function safeUsername(username) {
+  const u = String(username || "").trim();
+  return u ? u.slice(0, 48) : "O‘yinchi";
+}
+function safeAvatarId(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x < 1 || x > 50) return 1;
+  return Math.floor(x);
+}
+function genVoucherCode(prefix = "TM") {
+  const rnd = Math.random().toString(16).slice(2, 8).toUpperCase();
+  const rnd2 = Math.random().toString(16).slice(2, 8).toUpperCase();
+  return `${prefix}-${rnd}-${rnd2}`;
+}
+function genToken() {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+// ----------------------
+// DB init + migrations
+// ----------------------
 async function initDB() {
   // users
   await pool.query(`
@@ -32,12 +62,21 @@ async function initDB() {
     );
   `);
 
-  // indekslar
+  // MUHIM: old constraint’larni tozalash (telegram_id nullable + unique only when not null)
+  await pool.query(`ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_telegram_id_key;`);
+  await pool.query(`DROP INDEX IF EXISTS users_telegram_id_key;`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_unique
+    ON users(telegram_id)
+    WHERE telegram_id IS NOT NULL;
+  `);
+
+  // indexes
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_score ON users(score DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_last_played ON users(last_played);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_identity ON users(identity);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);`);
 
   // coupons catalog
   await pool.query(`
@@ -67,8 +106,7 @@ async function initDB() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_coupons_user ON user_coupons(user_identity);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_coupons_status ON user_coupons(status);`);
 
-  // Catalog seed (siz aytgan 3 ta kupon)
-  // Agar jadval bo‘sh bo‘lsa, kiritamiz
+  // seed coupons if empty
   const cnt = await pool.query(`SELECT COUNT(*)::int AS c FROM coupons;`);
   if (cnt.rows[0].c === 0) {
     await pool.query(
@@ -83,76 +121,62 @@ async function initDB() {
   console.log("DB init: jadval/indekslar mavjud ✅");
 }
 
-function makeIdentityTelegram(telegram_id) {
-  return `tg_${telegram_id}`;
-}
-function makeIdentityGuest(guest_id) {
-  return `guest_${guest_id}`;
-}
-
-function safeUsername(username) {
-  const u = String(username || "").trim();
-  if (!u) return "O‘yinchi";
-  return u.slice(0, 48);
-}
-
-function safeAvatarId(n) {
-  const x = Number(n);
-  if (!Number.isFinite(x) || x < 1 || x > 50) return 1;
-  return Math.floor(x);
-}
-
-function genVoucherCode(prefix = "TM") {
-  const rnd = Math.random().toString(16).slice(2, 8).toUpperCase();
-  const rnd2 = Math.random().toString(16).slice(2, 8).toUpperCase();
-  return `${prefix}-${rnd}-${rnd2}`;
-}
-function genToken() {
-  // token: vaqt + random
-  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-}
-
 // ----------------------
 // POST /register
+// KALIT FIKR: identity’ni frontend yuborsa — aynan shuni ishlatamiz.
+// Telegramga o‘tganda guest identity’ni "upgrade" qilamiz (yangi row ochmaymiz).
 // ----------------------
 app.post("/register", async (req, res) => {
   try {
-    const { mode } = req.body || {};
+    const body = req.body || {};
+    const mode = body.mode;
 
-    let identity = null;
+    // 1) identity: agar client yuborsa, shuni ishlatamiz (eng to‘g‘ri yo‘l)
+    let identity = String(body.identity || "").trim();
+
+    // 2) agar yubormasa, mode bo‘yicha yasaymiz
     let telegram_id = null;
     let is_guest = true;
 
-    if (mode === "telegram") {
-      telegram_id = req.body.telegram_id;
-      if (!telegram_id) return res.status(400).json({ ok: false, error: "telegram_id_required" });
-      identity = makeIdentityTelegram(telegram_id);
-      is_guest = false;
+    if (!identity) {
+      if (mode === "telegram") {
+        telegram_id = body.telegram_id;
+        if (!telegram_id) return res.status(400).json({ ok: false, error: "telegram_id_required" });
+        identity = makeIdentityTelegram(telegram_id);
+        is_guest = false;
+      } else {
+        const guest_id = body.guest_id;
+        if (!guest_id) return res.status(400).json({ ok: false, error: "guest_id_required" });
+        identity = makeIdentityGuest(guest_id);
+        is_guest = true;
+      }
     } else {
-      const guest_id = req.body.guest_id;
-      if (!guest_id) return res.status(400).json({ ok: false, error: "guest_id_required" });
-      identity = makeIdentityGuest(guest_id);
-      is_guest = true;
+      // client identity yuborgan bo‘lsa: telegram_id bo‘lsa is_guest=false
+      if (mode === "telegram" && body.telegram_id) {
+        telegram_id = body.telegram_id;
+        is_guest = false;
+      } else {
+        is_guest = true;
+      }
     }
 
-    const username = safeUsername(req.body.username);
-    const avatar_id = safeAvatarId(req.body.avatar_id);
+    const username = safeUsername(body.username);
+    const avatar_id = safeAvatarId(body.avatar_id);
 
-    // upsert by identity
     const q = `
-      INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, score, diamonds)
-      VALUES ($1, $2, $3, $4, $5, 0, 0)
+      INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, score, diamonds, last_played)
+      VALUES ($1, $2, $3, $4, $5, 0, 0, CURRENT_TIMESTAMP)
       ON CONFLICT (identity)
       DO UPDATE SET
         telegram_id = COALESCE(EXCLUDED.telegram_id, users.telegram_id),
         is_guest = EXCLUDED.is_guest,
         username = EXCLUDED.username,
-        avatar_id = EXCLUDED.avatar_id
-      RETURNING identity, is_guest, username, avatar_id, score, diamonds;
+        avatar_id = EXCLUDED.avatar_id,
+        last_played = CURRENT_TIMESTAMP
+      RETURNING identity, telegram_id, is_guest, username, avatar_id, score, diamonds;
     `;
 
     const r = await pool.query(q, [identity, telegram_id, is_guest, username, avatar_id]);
-
     return res.json({ ok: true, user: r.rows[0] });
   } catch (e) {
     console.error("REGISTER ERROR:", e);
@@ -165,7 +189,7 @@ app.post("/register", async (req, res) => {
 // ----------------------
 app.post("/save", async (req, res) => {
   try {
-    const identity = String(req.body.identity || "");
+    const identity = String(req.body.identity || "").trim();
     const score = Number(req.body.score || 0);
     const earned = Number(req.body.earned_diamonds || 0);
 
@@ -183,7 +207,6 @@ app.post("/save", async (req, res) => {
     const r = await pool.query(q, [identity, score, earned]);
 
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "user_not_found" });
-
     return res.json({ ok: true, score: r.rows[0].score, diamonds: r.rows[0].diamonds });
   } catch (e) {
     console.error("SAVE ERROR:", e);
@@ -235,7 +258,7 @@ app.get("/coupons", async (req, res) => {
 // ----------------------
 app.get("/my/coupons", async (req, res) => {
   try {
-    const identity = String(req.query.identity || "");
+    const identity = String(req.query.identity || "").trim();
     if (!identity) return res.status(400).json({ ok: false, error: "identity_required" });
 
     const r = await pool.query(`
@@ -261,13 +284,12 @@ app.get("/my/coupons", async (req, res) => {
 app.post("/coupons/exchange", async (req, res) => {
   const client = await pool.connect();
   try {
-    const identity = String(req.body.identity || "");
+    const identity = String(req.body.identity || "").trim();
     const coupon_id = Number(req.body.coupon_id || 0);
     if (!identity || !coupon_id) return res.status(400).json({ ok: false, error: "bad_request" });
 
     await client.query("BEGIN");
 
-    // user diamonds
     const u = await client.query(`SELECT diamonds FROM users WHERE identity=$1 FOR UPDATE;`, [identity]);
     if (!u.rowCount) {
       await client.query("ROLLBACK");
@@ -275,7 +297,6 @@ app.post("/coupons/exchange", async (req, res) => {
     }
     const have = Number(u.rows[0].diamonds || 0);
 
-    // coupon
     const c = await client.query(`SELECT id, title, cost_diamonds FROM coupons WHERE id=$1 AND is_active=true;`, [coupon_id]);
     if (!c.rowCount) {
       await client.query("ROLLBACK");
@@ -288,11 +309,10 @@ app.post("/coupons/exchange", async (req, res) => {
       return res.json({ ok: false, error: "NOT_ENOUGH_DIAMONDS", need: cost, have });
     }
 
-    // deduct
     const left = have - cost;
+
     await client.query(`UPDATE users SET diamonds=$2 WHERE identity=$1;`, [identity, left]);
 
-    // create certificate
     const voucher_code = genVoucherCode("TM");
     const token = genToken();
 
@@ -301,7 +321,6 @@ app.post("/coupons/exchange", async (req, res) => {
       VALUES ($1, $2, $3, $4, 'active');
     `, [identity, coupon_id, voucher_code, token]);
 
-    // qr payload: redeem link
     const redeemBase = process.env.REDEEM_BASE_URL || `https://${req.headers.host}`;
     const redeemUrl = `${redeemBase}/redeem?token=${encodeURIComponent(token)}`;
     const qr_data_url = await QRCode.toDataURL(redeemUrl);
@@ -331,7 +350,7 @@ app.post("/coupons/exchange", async (req, res) => {
 // ----------------------
 app.get("/redeem", async (req, res) => {
   try {
-    const token = String(req.query.token || "");
+    const token = String(req.query.token || "").trim();
     if (!token) return res.status(400).send("Token required");
 
     const r = await pool.query(`
@@ -344,9 +363,7 @@ app.get("/redeem", async (req, res) => {
     if (!r.rowCount) return res.status(404).send("Invalid coupon");
 
     const row = r.rows[0];
-    if (row.status !== "active") {
-      return res.status(200).send(`Coupon already ${row.status.toUpperCase()}`);
-    }
+    if (row.status !== "active") return res.status(200).send(`Coupon already ${row.status.toUpperCase()}`);
 
     await pool.query(`
       UPDATE user_coupons
