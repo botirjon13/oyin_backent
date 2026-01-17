@@ -76,7 +76,7 @@ function safeText(v, max = 40) {
 
 // REGISTER
 app.post("/register", async (req, res) => {
-  const { mode, telegram_id, username, avatar_id, guest_id, avatar_url } = req.body;
+  const { mode, telegram_id, username, avatar_id, guest_id } = req.body;
 
   const isTelegram = mode === "telegram" && telegram_id;
   const isGuest = mode === "guest" && guest_id;
@@ -85,37 +85,49 @@ app.post("/register", async (req, res) => {
     return res.status(400).json({ error: "Invalid register payload" });
   }
 
-  const identity = isTelegram ? `tg:${telegram_id}` : `guest:${guest_id}`;
-
   const safeAvatarId = Number.isInteger(Number(avatar_id)) ? Number(avatar_id) : 1;
-  const safeUsername = safeText(username, 40) || (isTelegram ? `tg_${telegram_id}` : `guest_${String(guest_id).slice(0, 6)}`);
-  const safeAvatarUrl = safeText(avatar_url, 200); // ixtiyoriy (front yuborsa)
+  const safeUsername = (username && String(username).slice(0, 40)) || (isTelegram ? `tg_${telegram_id}` : `guest_${String(guest_id).slice(0, 6)}`);
 
   try {
-    // Eski schema bilan mos: telegram_id unique bo'lishi mumkin
-    // Biz identity bo'yicha upsert qilamiz
-    const q = `
-      INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, avatar_url)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (identity)
-      DO UPDATE SET
-        telegram_id = EXCLUDED.telegram_id,
-        is_guest = EXCLUDED.is_guest,
-        username = EXCLUDED.username,
-        avatar_id = EXCLUDED.avatar_id,
-        avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
-        last_played = CURRENT_TIMESTAMP
-      RETURNING identity, is_guest, username, avatar_id, score;
-    `;
+    let result;
 
-    const result = await pool.query(q, [
-      identity,
-      isTelegram ? telegram_id : null,
-      isTelegram ? false : true,
-      safeUsername,
-      safeAvatarId,
-      safeAvatarUrl
-    ]);
+    if (isTelegram) {
+      const identity = `tg:${telegram_id}`;
+
+      // TELEGRAM: telegram_id UNIQUE bo'lsa ham yiqilmaydi
+      result = await pool.query(
+        `
+        INSERT INTO users (telegram_id, identity, is_guest, username, avatar_id)
+        VALUES ($1, $2, FALSE, $3, $4)
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET
+          identity = EXCLUDED.identity,
+          is_guest = FALSE,
+          username = EXCLUDED.username,
+          avatar_id = EXCLUDED.avatar_id,
+          last_played = CURRENT_TIMESTAMP
+        RETURNING identity, is_guest, username, avatar_id, score;
+        `,
+        [telegram_id, identity, safeUsername, safeAvatarId]
+      );
+    } else {
+      const identity = `guest:${guest_id}`;
+
+      // GUEST: identity UNIQUE bo'yicha
+      result = await pool.query(
+        `
+        INSERT INTO users (identity, is_guest, username, avatar_id)
+        VALUES ($1, TRUE, $2, $3)
+        ON CONFLICT (identity)
+        DO UPDATE SET
+          username = EXCLUDED.username,
+          avatar_id = EXCLUDED.avatar_id,
+          last_played = CURRENT_TIMESTAMP
+        RETURNING identity, is_guest, username, avatar_id, score;
+        `,
+        [identity, safeUsername, safeAvatarId]
+      );
+    }
 
     res.json({ ok: true, user: result.rows[0] });
   } catch (err) {
