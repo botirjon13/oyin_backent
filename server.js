@@ -398,16 +398,16 @@ app.post("/coupons/exchange", async (req, res) => {
     await client.query("COMMIT");
 
     return res.json({
-      ok: true,
-      certificate: {
-        title: c.rows[0].title,
-        voucher_code,
-        token,
-        qr_data_url,
-        redeemUrl,
-        diamonds_left: left,
-      },
-    });
+  ok: true,
+  certificate: {
+    title: c.rows[0].title,
+    voucher_code,
+    qr_data_url,
+    diamonds_left: left,
+    token, // ✅ qo‘shildi
+  },
+});
+
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("EXCHANGE ERROR:", e);
@@ -516,6 +516,28 @@ app.post("/coupons/mark-used", async (req, res) => {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
+// POST /coupons/mark-used  { token }
+app.post("/coupons/mark-used", async (req, res) => {
+  try {
+    const token = String(req.body.token || "");
+    if (!token) return res.status(400).json({ ok: false, error: "token_required" });
+
+    const r = await pool.query(
+      `UPDATE user_coupons
+       SET status='used', used_at=CURRENT_TIMESTAMP
+       WHERE token=$1 AND status='active'
+       RETURNING id;`,
+      [token]
+    );
+
+    return res.json({ ok: true, updated: r.rowCount });
+  } catch (e) {
+    console.error("MARK USED ERROR:", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 
 // ----------------------
 // GET /redeem?token=...
