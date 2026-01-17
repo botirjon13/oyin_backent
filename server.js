@@ -418,6 +418,74 @@ app.post("/coupons/exchange", async (req, res) => {
 });
 
 // ----------------------
+// POST /coupons/download   { identity, voucher_code }
+// Download qilinsa -> USED bo'ladi
+// ----------------------
+app.post("/coupons/download", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const identity = String(req.body.identity || "");
+    const voucher_code = String(req.body.voucher_code || "");
+    if (!identity || !voucher_code) {
+      return res.status(400).json({ ok: false, error: "bad_request" });
+    }
+
+    await client.query("BEGIN");
+
+    // Kupon user'ga tegishlimi?
+    const r = await client.query(
+      `
+      SELECT uc.id, uc.status, uc.token, c.title
+      FROM user_coupons uc
+      JOIN coupons c ON c.id = uc.coupon_id
+      WHERE uc.user_identity = $1 AND uc.voucher_code = $2
+      LIMIT 1
+      FOR UPDATE;
+      `,
+      [identity, voucher_code]
+    );
+
+    if (!r.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "coupon_not_found" });
+    }
+
+    const row = r.rows[0];
+
+    // Agar oldin USED bo'lsa ham QR beramiz (lekin status o'zgarmaydi)
+    const redeemBase = process.env.REDEEM_BASE_URL || `https://${req.headers.host}`;
+    const redeemUrl = `${redeemBase}/redeem?token=${encodeURIComponent(row.token)}`;
+    const qr_data_url = await QRCode.toDataURL(redeemUrl);
+
+    // Download qilinsa ACTIVE -> USED bo'lsin
+    if (row.status === "active") {
+      await client.query(
+        `UPDATE user_coupons SET status='used', used_at=CURRENT_TIMESTAMP WHERE id=$1;`,
+        [row.id]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      certificate: {
+        title: row.title,
+        voucher_code,
+        qr_data_url,
+        status_after: row.status === "active" ? "used" : row.status,
+      },
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("DOWNLOAD ERROR:", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  } finally {
+    client.release();
+  }
+});
+
+// ----------------------
 // POST /coupons/mark-used
 // body: { token }
 // This is called after DOWNLOAD (not after scan)
