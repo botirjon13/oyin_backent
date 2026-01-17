@@ -10,19 +10,17 @@ app.use(cors());
 // PostgreSQL ulanishi
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes("railway")
-    ? { rejectUnauthorized: false }
-    : undefined
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : undefined
 });
 
-// DB init
+// DB init (jadvalni siz SQL bilan yaratgansiz, lekin bu ham zarar qilmaydi)
 async function initDB() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        identity TEXT UNIQUE NOT NULL,           -- "tg:123" yoki "guest:uuid"
-        telegram_id BIGINT,                      -- faqat telegram bo'lsa
+        identity TEXT UNIQUE NOT NULL,
+        telegram_id BIGINT,
         is_guest BOOLEAN DEFAULT TRUE,
         username TEXT,
         avatar_id INTEGER DEFAULT 1,
@@ -32,25 +30,23 @@ async function initDB() {
       );
     `);
 
-    // Indekslar (tezlik uchun)
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_score ON users(score DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_last_played ON users(last_played);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest);`);
 
-    console.log("Leaderboard jadvali mavjud yoki yaratildi ✅");
+    console.log("DB tayyor ✅");
   } catch (err) {
     console.error("DB init xato:", err);
   }
 }
 initDB();
 
-// Helper: sanitize
 function safeText(v, max = 40) {
   if (!v) return null;
   return String(v).trim().slice(0, max);
 }
 
-// 1) Auto-registratsiya
+// 1) Auto-registratsiya (kirishda chaqiriladi)
 app.post("/register", async (req, res) => {
   const { mode, telegram_id, username, avatar_id, guest_id } = req.body;
 
@@ -127,13 +123,12 @@ app.post("/save", async (req, res) => {
   }
 });
 
-// 3) Top-10 (faqat Telegram userlar)
+// 3) Top-10 (Variant 1: Guest ham ko'rinadi)
 app.get("/leaderboard", async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT username AS nickname, avatar_id, score
+      SELECT username AS nickname, avatar_id, score, is_guest
       FROM users
-      WHERE is_guest = FALSE
       ORDER BY score DESC, last_played ASC
       LIMIT 10
     `);
@@ -144,7 +139,7 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// Health
+// Health check
 app.get("/", (req, res) => res.json({ status: "ok" }));
 
 const PORT = process.env.PORT || 3000;
