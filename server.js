@@ -54,52 +54,64 @@ app.get("/", (req, res) => res.json({ status: "ok" }));
  * guest: { guest_id, username, avatar_id }
  */
 app.post("/register", async (req, res) => {
+  const {
+    mode,
+    telegram_id,
+    guest_id,
+    username,
+    avatar_id
+  } = req.body;
+
   try {
-    const { mode, telegram_id, guest_id, username, avatar_id } = req.body || {};
-
-    const safeAvatarId = Number.isFinite(Number(avatar_id)) ? Number(avatar_id) : 1;
-
-    let identity;
-    let isGuest = true;
-    let tgId = null;
+    let result;
 
     if (mode === "telegram" && telegram_id) {
-      identity = `tg_${telegram_id}`;
-      isGuest = false;
-      tgId = Number(telegram_id);
-    } else if (mode === "guest" && guest_id) {
-      identity = `guest_${String(guest_id)}`;
-      isGuest = true;
+      // 🔹 TELEGRAM USER (UPSERT)
+      result = await pool.query(
+        `
+        INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id)
+        VALUES ($1, $2, FALSE, $3, $4)
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET
+          username = EXCLUDED.username,
+          avatar_id = EXCLUDED.avatar_id,
+          is_guest = FALSE,
+          last_played = CURRENT_TIMESTAMP
+        RETURNING *;
+        `,
+        [
+          `tg_${telegram_id}`,
+          telegram_id,
+          username || "Telegram User",
+          avatar_id || 1
+        ]
+      );
     } else {
-      return res.status(400).json({ ok: false, error: "Invalid payload" });
+      // 🔹 GUEST USER (identity UNIQUE bo‘yicha)
+      result = await pool.query(
+        `
+        INSERT INTO users (identity, is_guest, username, avatar_id)
+        VALUES ($1, TRUE, $2, $3)
+        ON CONFLICT (identity)
+        DO UPDATE SET
+          last_played = CURRENT_TIMESTAMP
+        RETURNING *;
+        `,
+        [
+          guest_id,
+          username || "Guest",
+          avatar_id || 1
+        ]
+      );
     }
 
-    const safeUsername =
-      (username && String(username).slice(0, 60)) ||
-      (isGuest ? "Guest" : `tg_${telegram_id}`);
+    res.json({ ok: true, user: result.rows[0] });
 
-    const q = `
-      INSERT INTO users (identity, telegram_id, is_guest, username, avatar_id, last_played)
-      VALUES ($1, $2, $3, $4, $5, NOW())
-      ON CONFLICT (identity)
-      DO UPDATE SET
-        telegram_id = COALESCE(EXCLUDED.telegram_id, users.telegram_id),
-        is_guest = EXCLUDED.is_guest,
-        username = EXCLUDED.username,
-        avatar_id = EXCLUDED.avatar_id,
-        last_played = NOW()
-      RETURNING identity, telegram_id, is_guest, username, avatar_id, score;
-    `;
-
-    const { rows } = await pool.query(q, [identity, tgId, isGuest, safeUsername, safeAvatarId]);
-
-    return res.json({ ok: true, user: rows[0] });
-  } catch (e) {
-    console.error("REGISTER ERROR:", e);
-    return res.status(500).json({ ok: false, error: "DB error" });
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
+    res.status(500).json({ ok: false, error: "register_failed" });
   }
 });
-
 /**
  * SAVE SCORE
  * identity + score keladi (identity registratsiyadan keyin localStorage’da saqlanadi)
